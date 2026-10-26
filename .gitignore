@@ -1,0 +1,4 @@
+build/
+*.nes
+*.so
+__pycache__/
