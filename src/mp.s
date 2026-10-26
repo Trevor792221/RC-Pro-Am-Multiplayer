@@ -4,8 +4,8 @@
 ; Everything in this file is new code.  It is stored in two extra 4KB CHR-ROM
 ; banks appended to the cartridge and copied into the 8KB PRG-RAM at $6000 by
 ; a tiny loader (see LOADER segment) when the console is reset.  The original
-; program is entered from a handful of "jsr"/"jmp" hooks patched into the
-; original PRG-ROM (see build.py for the list).
+; program enters it through 7 "jsr"/"jmp" hooks patched into the original
+; PRG-ROM (see build.py for the list).
 ;
 ; Player 2 drives the car in object slot 1 (normally a CPU car).  It runs the
 ; game's own player-car code: before slot 1's update the per-car state of
@@ -27,6 +27,7 @@ handler_vec  = $1E              ; jmp ($1E) vector used by the object loop
 pad_held     = $27
 pad_new      = $28
 steer        = $2B              ; lo nibble direction counter, hi=$F0 if B held
+spr_next     = $26              ; next free sprite list entry
 obj_idx      = $2C
 cam_x        = $32              ; 16 bit screen-x of camera
 cam_xs       = $34              ; cam_x + 4
@@ -78,17 +79,12 @@ c_laps       = $05FC
 SetCHR0      = $FF9D
 SetCHR1      = $FFB1
 Reset_cont   = $A10C            ; routine the loader hook replaced
-ReadPad_cont = $9E35            ; rest of the joypad routine
-SteerJoin    = $9E64
 SteerTable   = $9E9A
-CamOrig      = $A748
 DrawTag      = $93B9
 DrawSprites  = $EC6A
-ItemsNear    = $BBD9
 DrawCarOnly  = $B1A9
-RaceInit_end = $BA97
-NewGame      = $81A2
 TitleEnd     = $91B6
+AddScore     = $94D4            ; A = tens, Y = thousands (BCD-like pairs)
 PlaySfx      = $C4B9
 
 ; -----------------------------------------------------------------------------
@@ -127,14 +123,18 @@ boot:
         lda #0
         sta twop
         sta in_p2
-        jsr make_title_text
+        sta title_clean
+        jsr set_dispatch
+        ldx #0
+        jsr copy_title
         jmp Reset_cont
 
 ; ---- helpers ------------------------------------------------------------------
-; In a 1 player game every hook must cost a multiple of 8 extra cycles before
-; the HUD split: the game polls for the sprite 0 hit with an 8 cycle loop, so
-; the split (and everything after it) then happens on exactly the same cycle as
-; in the unpatched game.  PAD n burns n cycles without touching the flags.
+; 1 player games must run exactly as before, down to the CPU cycle.  The hooks
+; that run during a race (before the HUD split) therefore cost a multiple of 8
+; extra cycles in a 1 player game: the game polls for the sprite 0 hit with an
+; 8 cycle loop, so the split and everything after it happen on the same cycle
+; as in the unpatched game.  PAD n burns n cycles without touching the flags.
 .macro PAD n
   .if n = 1 || n < 0
         .error "PAD"
@@ -157,23 +157,33 @@ active:
 ; =============================================================================
 ; Title screen
 ; =============================================================================
-title_1p: .byte $22,$69," FOR 1 PLAYER ",0,0
-title_2p: .byte $22,$69,"FOR 2 PLAYERS ",0,0
+; Strings for the title screen text routine ($9281): PPU address, text, 0, 0.
+; The 1 player text is the game's own text at the same place.  The padded
+; version is shown for one frame after switching back from 2 players, to
+; clear the wider 2 player text.
+title_1p:  .byte $22,$6A,"FOR 1 PLAYER",0,0
+title_1pc: .byte $22,$69," FOR 1 PLAYER ",0,0
+title_2p:  .byte $22,$69,"FOR 2 PLAYERS ",0,0
+
+; copy string X (offset from title_1p) to the buffer the title screen prints
+copy_title:
+        ldy #0
+@loop:  lda title_1p,x
+        sta title_text,y
+        inx
+        iny
+        cpy #18
+        bcc @loop
+        rts
 
 make_title_text:
-        ldx #17
+        ldx #title_2p-title_1p
         lda twop
-        bne @two
-@one:   lda title_1p,x
-        sta title_text,x
-        dex
-        bpl @one
-        rts
-@two:   lda title_2p,x
-        sta title_text,x
-        dex
-        bpl @two
-        rts
+        bne @set
+        ldx #title_1pc-title_1p
+        lda #2
+        sta title_clean
+@set:   jmp copy_title
 
 ; hook at $D120, the end of the title screen frame (replaces "jmp $91B6")
 h_title:
@@ -190,8 +200,15 @@ h_title:
         lda twop
         eor #1
         sta twop
+        jsr set_dispatch
         jsr make_title_text
-@done:  jmp TitleEnd
+@done:  lda title_clean          ; back to the original 1 player text
+        beq @end
+        dec title_clean
+        bne @end
+        ldx #0
+        jsr copy_title
+@end:   jmp TitleEnd
 
 ; =============================================================================
 ; Controller 2.  The game only reads controller 1 (at $9E30, late in the frame
@@ -249,15 +266,40 @@ read_p2:
         jmp @join
 
 ; =============================================================================
-; Object dispatcher (hook at $9BBF, replaces "jsr $8068" for slots 0-3)
+; Object dispatcher (hook at $9BBF: "jsr $8068" -> "jsr h_dispatch" for cars
+; 0-3; $8068 is "jmp ($001E)").  In a 1 player game h_dispatch is that very
+; instruction, so the cars are updated without a single extra cycle (this
+; matters: the race-end code jumps away from inside the player's update).
+; For 2 players the instruction is rewritten into a jump to dispatch2p.
 ; =============================================================================
 h_dispatch:
-        PAD 2
-        jsr active
-        bne @two
         jmp (handler_vec)
-@two:   cpx #0
+
+set_dispatch:
+        lda twop
+        bne @two
+        lda #$6C                ; jmp ($001E)
+        sta h_dispatch
+        lda #<handler_vec
+        sta h_dispatch+1
+        lda #>handler_vec
+        sta h_dispatch+2
+        rts
+@two:   lda #$4C                ; jmp dispatch2p
+        sta h_dispatch
+        lda #<dispatch2p
+        sta h_dispatch+1
+        lda #>dispatch2p
+        sta h_dispatch+2
+        rts
+
+dispatch2p:
+        lda real_game
+        beq @orig               ; attract demo
+        cpx #0
         bne @notp1
+        lda spr_next            ; where player 1's car sprite will go
+        sta p1_entry
         lda o_state+P2S         ; first frame of a race: car 1 still has
         and #$FC                ; the CPU state the game gave it
         cmp #4
@@ -268,13 +310,18 @@ h_dispatch:
 @notp1: cpx #P2S
         bne @orig
         jsr read_p2
+        jsr update_camera       ; player 1 has moved: place the camera
         ldx #P2S
+        lda #$FF
+        sta p2_entry
         lda o_state+P2S
         cmp #4
         beq @idle               ; waiting for the start / race finished
         and #$FC
         cmp #4
         bne @orig
+        lda spr_next
+        sta p2_entry
         jsr swap_in
         ldx #0
         stx obj_idx
@@ -282,6 +329,7 @@ h_dispatch:
         jsr @orig
         dec in_p2
         jsr swap_out
+        jsr cam_store           ; the player code centred it on player 2
         ldx #P2S
         stx obj_idx
         rts
@@ -369,27 +417,15 @@ swap_out:
         rts
 
 ; =============================================================================
-; Camera (hooks at $B63D and $B491, the calls from the player car code).
-; 1 player: original code.  2 players: follow the
-; leading human, moving at most a few pixels per frame so that the nametable
-; streaming keeps up.
+; Camera.  The player car code has just centred it on player 1 ($A748); in a
+; 2 player game it is moved to follow the leading human instead, at most a
+; few pixels per frame so that the nametable streaming keeps up.
 ; =============================================================================
 CAM_MAXX = 8
 CAM_MAXY = 6
 
-h_camera:
-        PAD 7
-        jsr active
-        bne @two
-        jmp CamOrig
-@two:   lda in_p2
-        beq @calc
-        rts                     ; player 2's own update: camera untouched
-@calc:  stx tmpx
-        sty tmpy
+update_camera:
         ldx leader
-        lda o_sector,x
-        sta cam_sector
         ; target screen position of the leader (same maths as $A748)
         lda o_xf,x
         sec
@@ -440,7 +476,7 @@ h_camera:
         sta camy+1
         lda #1
         sta cam_ok
-        jmp @store
+        jmp cam_store
 @smooth:
         ; x
         lda tx
@@ -472,7 +508,8 @@ h_camera:
         txa
         adc camy+1
         sta camy+1
-@store: lda camx
+cam_store:
+        lda camx
         sta cam_x
         clc
         adc #4
@@ -490,8 +527,6 @@ h_camera:
         sta cam_y+1
         adc #0
         sta cam_ys+1
-        ldx tmpx
-        ldy tmpy
         rts
 
 ; A:tmp0 = signed 16 bit difference, Y = limit.
@@ -527,25 +562,15 @@ clamp:
         ldx #$FF
         rts
 
+;=============================================================================
+; Player car sprites.  The game draws the player's car at the centre of the
+; screen and gives it palette 0; with two players the cars can be anywhere,
+; so before the sprites are drawn the entries of both human cars are given
+; their real screen position (like the CPU cars'), player 2's car gets its
+; own palette and owner, and the positions are kept for the tags.
+; X = car slot (0 / P2S), Y = sprite list entry or $FF for none.
 ; =============================================================================
-; Player car sprite position (hooks at $B645 and $B4A3).
-; The original code puts the player car at the centre of the screen; with two
-; players the car can be anywhere, so its position is computed like the CPU
-; cars'.  Y = sprite list entry, X = object slot (0).
-; =============================================================================
-h_plsprite:
-        PAD 3
-        jsr active
-        bne @two
-        lda #$7C
-        sta spr_list+2,y
-        lda #$58
-        sta spr_list+4,y
-        lda #0
-        sta spr_list+3,y
-        sta spr_list+5,y
-        rts
-@two:   stx tmpx
+place_car:
         lda o_xf,x
         sec
         sbc o_yf,x
@@ -560,11 +585,9 @@ h_plsprite:
         lda tmp0
         sec
         sbc cam_xs
-        sta spr_list+2,y
-        sta tmp2
+        sta tmp2                ; screen x
         lda tmp1
         sbc cam_xs+1
-        sta spr_list+3,y
         sta tmp3
         lda o_xf,x
         clc
@@ -581,18 +604,24 @@ h_plsprite:
         lda tmp0
         sec
         sbc cam_ys
-        sta spr_list+4,y
-        sta tmp0
+        sta tmp0                ; screen y
         lda tmp1
         sbc cam_ys+1
-        sta spr_list+5,y
-        beq @vis_y
-        lda #1                  ; off the top/bottom: hide
-        sta spr_list+3,y
+        sta tmp1
+        beq @y_ok
+        lda #1                  ; off the top or bottom
         sta tmp3
-@vis_y: ; remember the screen position for the position tags / pull-along
-        ldx in_p2
+@y_ok:  cpy #$FF
+        beq @tag
+        lda tmp2
+        sta spr_list+2,y
         lda tmp3
+        sta spr_list+3,y        ; not 0: not drawn
+        lda tmp0
+        sta spr_list+4,y
+        lda tmp1
+        sta spr_list+5,y
+@tag:   lda tmp3
         bne @off
         lda tmp0
         cmp #$B8
@@ -603,40 +632,9 @@ h_plsprite:
         sta psx,x
         lda tmp0
         sta psy,x
-        ldx tmpx
         rts
 @off:   lda #0
         sta pvis,x
-        ldx tmpx
-        rts
-
-; hook at $B657: "txa / sta $14" (sprite palette = car slot)
-h_pal:
-        PAD 2
-        jsr slot_of_x
-        sta $14
-        rts
-
-; hook at $B4BB: "txa / sta $0306,y"
-h_pal7:
-        PAD 3
-        jsr slot_of_x
-        sta spr_list+6,y
-        rts
-
-; hooks at $B690 and $B4CB: "txa / sta $0307,y" (object owning the sprite)
-h_owner:
-        jsr slot_of_x
-        sta spr_list+7,y
-        rts
-
-; A = real object slot of the car being processed
-slot_of_x:
-        lda in_p2
-        bne @p2
-        txa
-        rts
-@p2:    lda #P2S
         rts
 
 ; =============================================================================
@@ -648,55 +646,20 @@ h_frame:
         jsr active
         bne @two
         jmp DrawTag
-@two:   jsr DrawTag             ; sets up the tag tiles for player 1
+@two:   lda sector_swap         ; give player 1's sector back (see h_finish)
+        beq @tags
+        lda sv_sector
+        sta o_sector
+        lda #0
+        sta sector_swap
+@tags:  jsr DrawTag             ; tag tiles for player 1
         jsr calc_p2pos
-        ; player 1 tag follows player 1's car
-        lda pvis
-        beq @hide1
-        lda psy
-        sec
-        sbc #$20
-        bcc @hide1
-        sta oam+4
-        sta oam+8
-        lda psx
-        sec
-        sbc #4
-        bcc @hide1
-        sta oam+7
-        clc
-        adc #8
-        bcs @hide1
-        sta oam+11
-        jmp @tag2
-@hide1: lda #$F8
-        sta oam+4
-        sta oam+8
-@tag2:  ; player 2 tag (written to OAM after the sprites, see h_oam)
         lda p2pos
         asl a
         clc
         adc #$E9
         sta p2tag_tile
-        lda pvis+1
-        beq @hide2
-        lda psy+1
-        sec
-        sbc #$20
-        bcc @hide2
-        sta p2tag_y
-        lda psx+1
-        sec
-        sbc #4
-        bcc @hide2
-        sta p2tag_x
-        clc
-        adc #8
-        bcs @hide2
-        jmp @lead
-@hide2: lda #$F8
-        sta p2tag_y
-@lead:  lda race_over
+        lda race_over
         beq @racing
         ; Race over: the game decides with $5C whether to continue.  With
         ; two humans the better one counts, but (as in 1 player) at least one
@@ -709,8 +672,37 @@ h_frame:
 @keep:  sta race_pos
         rts
 @racing:
+        jsr p2_lap_bonus
         jsr update_leader
         jmp pull_along
+
+; Lap bonuses for player 2, like the game gives player 1 ($A9DD): 25 points
+; every half lap, 100 points and a jingle for a full lap.
+p2_lap_bonus:
+        lda c_laps+P2S
+        cmp p2_laps
+        beq @half
+        bcc @set
+        lda #$0A
+        jsr PlaySfx
+        lda #0
+        ldy #1
+        jsr AddScore
+        jmp @set
+@half:  lda c_prog1+P2S
+        cmp p2_prog
+        beq @set
+        bcc @set                ; going backwards
+        and #1
+        bne @set
+        lda #$19
+        ldy #0
+        jsr AddScore
+@set:   lda c_laps+P2S
+        sta p2_laps
+        lda c_prog1+P2S
+        sta p2_prog
+        rts
 
 ; position (0..3) of player 2's car, counted like the game does for player 1
 calc_p2pos:
@@ -871,18 +863,79 @@ warp:
 @p2:    lda p2steer
         and #$0F
         sta p2lastdir
+        lda c_laps+P2S          ; no lap bonus for being pulled along
+        sta p2_laps
+        lda c_prog1+P2S
+        sta p2_prog
         rts
 
-; hook at $9BF8 (replaces "jsr $EC6A"): draw sprites, then player 2's tag
+; hook at $9BF8 (replaces "jsr $EC6A", which draws the sprite list)
 h_oam:
-        PAD 6
-        jsr DrawSprites
+        PAD 7
         jsr active
         bne @two
-        rts
-@two:   lda p2tag_y
+        jmp DrawSprites
+@two:   ldx #0
+        ldy p1_entry
+        jsr place_car
+        ldx #P2S
+        ldy p2_entry
+        jsr place_car
+        ldy p2_entry
+        cpy #$FF
+        beq @tag1
+        lda #P2S                ; player 2's car: own palette and owner
+        sta spr_list+7,y
+        lda spr_list+6,y
+        and #$FC
+        sta tmp0
+        lda spr_list+6,y
+        clc
+        adc #P2S
+        and #3
+        ora tmp0
+        sta spr_list+6,y
+@tag1:  ; player 1's tag (sprites 1 and 2) follows player 1's car
+        lda pvis
+        beq @hide1
+        lda psy
+        sec
+        sbc #$20
+        bcc @hide1
+        sta oam+4
+        sta oam+8
+        lda psx
+        sec
+        sbc #4
+        bcc @hide1
+        sta oam+7
+        clc
+        adc #8
+        bcs @hide1
+        sta oam+11
+        jmp @draw
+@hide1: lda #$F8
+        sta oam+4
+        sta oam+8
+@draw:  jsr DrawSprites
+        ; player 2's tag goes into the last two sprites
+        lda pvis+1
+        beq @hide2
+        lda psy+1
+        sec
+        sbc #$20
+        bcc @hide2
         sta oam+$F8
         sta oam+$FC
+        lda psx+1
+        sec
+        sbc #4
+        bcc @hide2
+        sta oam+$FB
+        clc
+        adc #8
+        bcs @hide2
+        sta oam+$FF
         lda p2tag_tile
         sta oam+$F9
         clc
@@ -891,22 +944,11 @@ h_oam:
         lda #P2S
         sta oam+$FA
         sta oam+$FE
-        lda p2tag_x
-        sta oam+$FB
-        clc
-        adc #8
-        sta oam+$FF
         rts
-
-; hook at $9BF2 (replaces "jsr $BBD9"): items/scenery are processed around
-; the sector of the car the camera follows
-h_items:
-        PAD 7
-        jsr active
-        bne @done
-        lda o_sector
-        sta cam_sector
-@done:  jmp ItemsNear
+@hide2: lda #$F8
+        sta oam+$F8
+        sta oam+$FC
+        rts
 
 ; =============================================================================
 ; Race set-up / end
@@ -928,6 +970,10 @@ race_init:
         lda p2steer
         and #$0F
         sta p2lastdir
+        lda c_laps+P2S
+        sta p2_laps
+        lda c_prog1+P2S
+        sta p2_prog
         lda $03F9               ; a new vehicle (all letters collected)
         cmp p2veh               ; starts again without upgrades
         beq @same
@@ -975,6 +1021,15 @@ h_finish:
         rts
 @two:   lda race_over
         bne @done
+        ; scenery and items are handled around player 1's sector ($BBD9,
+        ; right after this); use the leader's sector until h_frame
+        lda o_sector
+        sta sv_sector
+        ldx leader
+        lda o_sector,x
+        sta o_sector
+        lda #1
+        sta sector_swap
         ldx #3
 @chk:   lda c_laps,x
         cmp total_laps
@@ -993,6 +1048,7 @@ h_finish:
 ; =============================================================================
 .segment "BSS"
 title_text:  .res 18          ; first: must not cross a page
+title_clean: .res 1
 twop:        .res 1
 in_p2:       .res 1
 p2raw:       .res 1
@@ -1009,7 +1065,10 @@ sv_blink:    .res 1
 sv_near:     .res 2
 leader:      .res 1
 cam_ok:      .res 1
-cam_sector:  .res 1
+sv_sector:   .res 1
+sector_swap: .res 1
+p1_entry:    .res 1
+p2_entry:    .res 1
 camx:        .res 2
 camy:        .res 2
 tx:          .res 2
@@ -1018,14 +1077,12 @@ tmp0:        .res 1
 tmp1:        .res 1
 tmp2:        .res 1
 tmp3:        .res 1
-tmpx:        .res 1
-tmpy:        .res 1
 pvis:        .res 2
 psx:         .res 2
 psy:         .res 2
 p2pos:       .res 1
-p2tag_x:     .res 1
-p2tag_y:     .res 1
+p2_laps:     .res 1
+p2_prog:     .res 1
 p2tag_tile:  .res 1
 off_cnt:     .res 1
 hist_pos:    .res 1
@@ -1042,7 +1099,4 @@ h_p0:        .res HIST_N
 h_p1:        .res HIST_N
 h_lap:       .res HIST_N
 
-.export loader, h_title, h_dispatch, h_camera
-.export h_plsprite, h_pal, h_pal7, h_owner, h_frame, h_oam, h_items
-.export h_finish
-.export cam_sector, title_text
+.export loader, h_title, h_dispatch, h_frame, h_oam, h_finish, title_text

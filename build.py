@@ -52,25 +52,8 @@ def hooks(s):
         # object loop, cars 0-3
         (0x9BBF, [0x20, 0x68, 0x80], jsr(s['h_dispatch'])),
         # per-frame work after the objects moved
-        (0x9BF2, [0x20, 0xD9, 0xBB], jsr(s['h_items'])),
         (0x9BF5, [0x20, 0xB9, 0x93], jsr(s['h_frame'])),
         (0x9BF8, [0x20, 0x6A, 0xEC], jsr(s['h_oam'])),
-        # scenery/items around the followed car
-        (0xBBD9, [0xAD, 0x3C, 0x05], [0xAD, lo(s['cam_sector']), hi(s['cam_sector'])]),
-        (0xBBE7, [0xAD, 0x3C, 0x05], [0xAD, lo(s['cam_sector']), hi(s['cam_sector'])]),
-        (0xBBED, [0xAD, 0x3C, 0x05], [0xAD, lo(s['cam_sector']), hi(s['cam_sector'])]),
-        # camera (calls from the player car code)
-        (0xB63D, [0x20, 0x48, 0xA7], jsr(s['h_camera'])),
-        (0xB491, [0x20, 0x48, 0xA7], jsr(s['h_camera'])),
-        # player car sprite (normal / spinning)
-        (0xB645, [0xA9, 0x7C, 0x99, 0x02, 0x03, 0xA9], jsr(s['h_plsprite']) + jmp(0xB657)),
-        (0xB657, [0x8A, 0x85, 0x14], jsr(s['h_pal'])),
-        (0xB690, [0x8A, 0x99, 0x07, 0x03], jsr(s['h_owner']) + [NOP]),
-        # player car sprite (crashed)
-        (0xB4A3, [0xA9, 0x7C, 0x99, 0x02, 0x03, 0xA9], jsr(s['h_plsprite']) + jmp(0xB4AD)),
-        (0xB4B2, [0xA9, 0x00, 0x99, 0x03, 0x03, 0x99, 0x05, 0x03], [NOP] + jmp(0xB4BA)),
-        (0xB4BA, [0x8A, 0x99, 0x06, 0x03], jsr(s['h_pal7']) + [NOP]),
-        (0xB4CB, [0x8A, 0x99, 0x07, 0x03], jsr(s['h_owner']) + [NOP]),
         # race result
         (0xAA31, [0xAD, 0x50, 0x04], jsr(s['h_finish'])),
         # title screen
@@ -80,38 +63,73 @@ def hooks(s):
 
 
 def make_ips(orig, new):
+    """IPS records for every changed byte, and for every byte past the end of
+    the original file (so the patched file gets its full size)."""
     out = bytearray(b'PATCH')
     n = len(new)
+
+    def changed(i):
+        return i >= len(orig) or new[i] != orig[i]
+
+    def emit(start, chunk):
+        if start == 0x454F46:
+            raise Exception('IPS offset collides with the EOF marker')
+        if len(chunk) > 8 and chunk.count(chunk[0]) == len(chunk):
+            out.extend(start.to_bytes(3, 'big') + b'\0\0' + len(chunk).to_bytes(2, 'big') + bytes([chunk[0]]))
+        else:
+            out.extend(start.to_bytes(3, 'big') + len(chunk).to_bytes(2, 'big') + chunk)
+
     i = 0
-    orig = orig + bytes(max(0, n - len(orig)))
     while i < n:
-        if new[i] == orig[i] and i < len(orig):
+        if not changed(i):
             i += 1
             continue
-        # start of a changed run; extend while different (allow small equal gaps)
         j = i
-        while j < n and j - i < 0xFFFF:
-            if new[j] != orig[j]:
-                j += 1
-                continue
-            k = j
-            while k < n and new[k] == orig[k] and k - j < 6:
-                k += 1
-            if k < n and k - j < 6 and new[k] != orig[k]:
-                j = k
-                continue
-            break
-        chunk = new[i:j]
-        if i == 0x454F46:
-            raise Exception('IPS offset collides with EOF marker')
-        # RLE for long runs of one byte
-        if len(chunk) > 8 and chunk.count(chunk[0]) == len(chunk):
-            out += i.to_bytes(3, 'big') + b'\0\0' + len(chunk).to_bytes(2, 'big') + bytes([chunk[0]])
-        else:
-            out += i.to_bytes(3, 'big') + len(chunk).to_bytes(2, 'big') + chunk
+        while j < n and j - i < 0xFFFF and changed(j):
+            j += 1
+        # split long runs so that runs of one value become RLE records
+        k = i
+        while k < j:
+            m = k
+            while m < j and new[m] == new[k]:
+                m += 1
+            if m - k > 8:
+                emit(k, new[k:m])
+                k = m
+            else:
+                e = k
+                while e < j:
+                    r = e
+                    while r < j and new[r] == new[e]:
+                        r += 1
+                    if r - e > 8:
+                        break
+                    e = r
+                emit(k, new[k:e])
+                k = e
         i = j
     out += b'EOF'
     return bytes(out)
+
+
+def apply_ips(orig, ips):
+    rom = bytearray(orig)
+    assert ips[:5] == b'PATCH'
+    i = 5
+    while ips[i:i + 3] != b'EOF':
+        off = int.from_bytes(ips[i:i + 3], 'big')
+        size = int.from_bytes(ips[i + 3:i + 5], 'big')
+        i += 5
+        if size == 0:
+            data = bytes([ips[i + 2]]) * int.from_bytes(ips[i:i + 2], 'big')
+            i += 3
+        else:
+            data = ips[i:i + size]
+            i += size
+        if off + len(data) > len(rom):
+            rom += bytes(off + len(data) - len(rom))
+        rom[off:off + len(data)] = data
+    return bytes(rom)
 
 
 def main():
@@ -155,6 +173,7 @@ def main():
     out_rom = os.path.join(build_dir, 'rcproam_2p.nes')
     open(out_rom, 'wb').write(rom)
     ips = make_ips(orig, bytes(rom))
+    assert apply_ips(orig, ips) == bytes(rom), 'IPS does not reproduce the ROM'
     open(os.path.join(HERE, 'rcproam_2p.ips'), 'wb').write(ips)
     print('wrote', out_rom, 'and rcproam_2p.ips (%d bytes)' % len(ips))
 
