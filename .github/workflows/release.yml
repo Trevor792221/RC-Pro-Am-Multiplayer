@@ -1,0 +1,27 @@
+name: Release
+
+# Pushing a tag such as v1.0.0 publishes a GitHub release with the IPS patch.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" rcproam_2p.ips \
+            --title "R.C. Pro-Am 2 Player $GITHUB_REF_NAME" \
+            --notes "Simultaneous 2 player patch for R.C. Pro-Am (USA) (Rev 1).
+
+          Apply **rcproam_2p.ips** to \`R.C. Pro-Am (USA) (Rev 1).nes\` (CRC32 0296E5F4) with any IPS tool (Flips, Lunar IPS, or an online patcher). The patched ROM has CRC32 BA00BA0C.
+
+          On the title screen press SELECT (or START on controller 2) to choose FOR 2 PLAYERS. See the README for the rules."

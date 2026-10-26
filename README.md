@@ -1,5 +1,9 @@
 # R.C. Pro-Am – 2 Player patch
 
+[![Download the IPS patch](https://img.shields.io/badge/Download-rcproam__2p.ips-2ea44f?style=for-the-badge&logo=github)](https://github.com/Trevor792221/RC-Pro-Am-Multiplayer/releases/latest/download/rcproam_2p.ips)
+
+[All releases](https://github.com/Trevor792221/RC-Pro-Am-Multiplayer/releases)
+
 An IPS patch for **R.C. Pro-Am (USA) (Rev 1)** on the NES that adds simultaneous
 two-player racing, played much like R.C. Pro-Am II's multiplayer: both
 players share one screen, the screen follows whoever is ahead, and a player who
@@ -11,7 +15,7 @@ cycle-for-cycle the same as the unpatched game (see *Testing*).
 
 ## Applying
 
-Patch file: [`rcproam_2p.ips`](rcproam_2p.ips)
+Patch file: [`rcproam_2p.ips`](https://github.com/Trevor792221/RC-Pro-Am-Multiplayer/releases/latest/download/rcproam_2p.ips) (also in the repository root)
 
 Base ROM: `R.C. Pro-Am (USA) (Rev 1).nes` (iNES file, 65,552 bytes)
 
