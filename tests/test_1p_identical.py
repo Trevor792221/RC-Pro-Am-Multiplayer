@@ -3,7 +3,8 @@
 
 The original and the patched ROM are started from the very same machine state
 (the patched one additionally gets the add-on code in PRG-RAM) and are fed the
-same input; RAM and picture are compared on every frame.  Covers races played
+same input; RAM and picture are compared on every frame (except the picture
+of the title screen, which has the new player menu).  Covers races played
 by an autopilot (several levels, game over, continue) and the attract demo.
 
 usage: RCPA_ROM=original.nes tests/test_1p_identical.py [frames]
@@ -17,6 +18,8 @@ def compare(a, b, frames, drive):
     paths = {}
     bot = None
     t = 0
+    pending = None
+    last_title = -99
     for f in range(frames):
         if drive and racing(a):
             if bot is None:
@@ -34,15 +37,30 @@ def compare(a, b, frames, drive):
         a.frame(1, pads=p)
         b.frame(1, pads=p)
         ra, rb = a.ram(), b.ram()
+        # $02-$04: where the NMI handler saves A/X/Y while a screen is being
+        #   set up (the menu makes the title frame longer, so the interrupt
+        #   can land on another instruction of the set-up code);
         # $1A/$1B: pointer to the title text, which lives elsewhere;
         # $0180-$01FF: stack garbage below the stack pointer
-        ra = ra[:0x1A] + ra[0x1C:0x180] + ra[0x200:]
-        rb = rb[:0x1A] + rb[0x1C:0x180] + rb[0x200:]
-        if ra != rb or a.fb.tobytes() != b.fb.tobytes():
+        ra = ra[:2] + ra[5:0x1A] + ra[0x1C:0x180] + ra[0x200:]
+        rb = rb[:2] + rb[5:0x1A] + rb[0x1C:0x180] + rb[0x200:]
+        # The title screen shows the new 1 PLAYER / 2 PLAYERS menu; printing
+        # it takes a little longer, which also shows on the frames just
+        # before and after it.  Pictures are not compared there.
+        title = a[0x0D] == 0x10 and a[0x45B] == 0
+        if title:
+            pending = None
+            last_title = f
+        elif f - last_title <= 3:
+            title = True
+        elif pending is not None and f - pending[0] > 3:
+            return pending[1]
+        if ra != rb:
             diff = [j for j in range(len(ra)) if ra[j] != rb[j]]
-            return 'frame %d (mode %02X): RAM diff %s, picture %s' % (
-                f, a[0x0D], diff[:10], a.fb.tobytes() != b.fb.tobytes())
-    return None
+            return 'frame %d (mode %02X): RAM diff %s' % (f, a[0x0D], diff[:10])
+        if not title and pending is None and a.fb.tobytes() != b.fb.tobytes():
+            pending = (f, 'frame %d (mode %02X): picture differs' % (f, a[0x0D]))
+    return pending and pending[1]
 
 
 def main():

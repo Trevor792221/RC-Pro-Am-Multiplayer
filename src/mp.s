@@ -123,10 +123,8 @@ boot:
         lda #0
         sta twop
         sta in_p2
-        sta title_clean
         jsr set_dispatch
-        ldx #0
-        jsr copy_title
+        jsr make_title_text
         jmp Reset_cont
 
 ; ---- helpers ------------------------------------------------------------------
@@ -157,57 +155,117 @@ active:
 ; =============================================================================
 ; Title screen
 ; =============================================================================
-; Strings for the title screen text routine ($9281): PPU address, text, 0, 0.
-; The 1 player text is the game's own text at the same place.  The padded
-; version is shown for one frame after switching back from 2 players, to
-; clear the wider 2 player text.
-title_1p:  .byte $22,$6A,"FOR 1 PLAYER",0,0
-title_1pc: .byte $22,$69," FOR 1 PLAYER ",0,0
-title_2p:  .byte $22,$69,"FOR 2 PLAYERS ",0,0
+; The title screen prints a list of strings every frame ($9281: PPU address,
+; text, 0 - and a final 0).  Instead of the game's "FOR 1 PLAYER" it prints a
+; menu below "PUSH START":
+;
+;       1 PLAYER
+;       2 PLAYERS
+;
+; The selected line blinks (the title font has no cursor symbol).
+MENU_1P = $226B
+MENU_2P = $22AB
+menu_1p:   .byte "1 PLAYER "
+menu_2p:   .byte "2 PLAYERS"
+MENU_LEN = 9
 
-; copy string X (offset from title_1p) to the buffer the title screen prints
-copy_title:
-        ldy #0
-@loop:  lda title_1p,x
-        sta title_text,y
+; build the strings in title_text for the current choice and blink phase
+make_title_text:
+        ldx #0
+        lda #>MENU_1P
+        sta title_text,x
+        lda #<MENU_1P
+        sta title_text+1,x
+        lda #0                  ; 1 player line: blank it when it is the
+        jsr menu_line           ; selection and the blink is off
+        lda #>MENU_2P
+        sta title_text,x
+        lda #<MENU_2P
+        sta title_text+1,x
+        lda #1
+        jsr menu_line
+        ldy #0                  ; colour the 2 PLAYERS line like 1 PLAYER
+@attr:  lda menu_attr,y
+        sta title_text,x
         inx
         iny
-        cpy #18
-        bcc @loop
+        cpy #MENU_ATTR_LEN
+        bcc @attr
         rts
 
-make_title_text:
-        ldx #title_2p-title_1p
-        lda twop
-        bne @set
-        ldx #title_1pc-title_1p
-        lda #2
-        sta title_clean
-@set:   jmp copy_title
+; Attribute bytes for the rows the 2 PLAYERS line is on (rows 20-23, columns
+; 8-19): upper half palette 3 like the rows above, lower half palette 2 as
+; before.  The print routine converts characters to tiles (c - $33 here), so
+; $E2 is written as $AF.  Ends the string list.
+menu_attr: .byte $23,$EA,$E2,$E2,$E2,0,0
+MENU_ATTR_LEN = 7
+
+; A = line (0/1), X = buffer offset of its address; adds text and the 0
+menu_line:
+        inx
+        inx
+        cmp twop
+        bne @show
+        lda frame_ctr
+        and #$18                ; blink: hidden 8 frames out of 32
+        bne @show
+        ldy #MENU_LEN
+        lda #' '
+@blank: sta title_text,x
+        inx
+        dey
+        bne @blank
+        beq @end
+@show:  ldy #0
+        cpx #2                  ; which line is it?
+        bne @two
+@one:   lda menu_1p,y
+        sta title_text,x
+        inx
+        iny
+        cpy #MENU_LEN
+        bcc @one
+        bcs @end
+@two:   lda menu_2p,y
+        sta title_text,x
+        inx
+        iny
+        cpy #MENU_LEN
+        bcc @two
+@end:   lda #0
+        sta title_text,x
+        inx
+        rts
 
 ; hook at $D120, the end of the title screen frame (replaces "jmp $91B6")
 h_title:
         jsr read_p2
         lda continues
-        bne @done               ; "FOR CONTINUE" screen: keep the choice
-        lda pad_new
-        and #$20                ; SELECT on controller 1
-        bne @toggle
+        bne @end                ; "FOR CONTINUE" screen: keep the choice
         lda p2new
-        and #$10                ; START on controller 2
-        beq @done
-@toggle:
+        and #$10                ; START on controller 2: 2 players
+        beq @pad1
+        lda #1
+        bne @set
+@pad1:  lda pad_new
+        and #$20                ; SELECT on controller 1: other choice
+        beq @updown
         lda twop
         eor #1
-        sta twop
+        jmp @set
+@updown:
+        lda pad_new
+        and #$08                ; up: 1 player
+        beq @down
+        lda #0
+        beq @set
+@down:  lda pad_new
+        and #$04                ; down: 2 players
+        beq @text
+        lda #1
+@set:   sta twop
         jsr set_dispatch
-        jsr make_title_text
-@done:  lda title_clean          ; back to the original 1 player text
-        beq @end
-        dec title_clean
-        bne @end
-        ldx #0
-        jsr copy_title
+@text:  jsr make_title_text
 @end:   jmp TitleEnd
 
 ; =============================================================================
@@ -1047,8 +1105,7 @@ h_finish:
 
 ; =============================================================================
 .segment "BSS"
-title_text:  .res 18          ; first: must not cross a page
-title_clean: .res 1
+title_text:  .res 32          ; first: must not cross a page
 twop:        .res 1
 in_p2:       .res 1
 p2raw:       .res 1

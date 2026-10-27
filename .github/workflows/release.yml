@@ -1,6 +1,6 @@
 name: Release
 
-# Publishes the IPS patch as a GitHub release (tag v1.0.0, created by GitHub).
+# Publishes the IPS patch as a GitHub release (tag from TAG below, created by GitHub).
 # Runs when the patch changes on the development branch or the default branch,
 # or by hand.  If the release exists, its patch file is replaced.
 on:
@@ -18,7 +18,7 @@ permissions:
   contents: write
 
 env:
-  TAG: v1.0.0
+  TAG: v1.1.0
 
 jobs:
   release:

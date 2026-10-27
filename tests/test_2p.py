@@ -9,7 +9,7 @@ import sys
 
 import numpy as np
 
-from harness import (NES, PATCHED, A, B, SELECT, START, Bot, labels, need_rom, racing,
+from harness import (NES, PATCHED, A, B, SELECT, START, UP, DOWN, Bot, labels, need_rom, racing,
                      record_path, start_game)
 
 FAILED = []
@@ -84,11 +84,17 @@ def main():
     n.frame(5, pads=START)
     n.frame(60, pads=0)
     seq = []
-    for pad in (SELECT, SELECT, START << 8, START << 8):
+    for pad in (DOWN, UP, SELECT, SELECT, START << 8, START << 8, UP):
         n.frame(3, pads=pad)
         n.frame(10, pads=0)
         seq.append(n[L['twop']])
-    check(seq == [1, 0, 1, 0], 'SELECT / controller 2 START toggle 2 players %s' % seq)
+    check(seq == [1, 0, 1, 0, 1, 1, 0], 'menu: down/up/SELECT/controller 2 START %s' % seq)
+    shown = []
+    for i in range(40):
+        n.frame(1, pads=0)
+        shown.append((n.ppu(0x226B) != 0, n.ppu(0x22AB) != 0))
+    check(all(s[1] for s in shown) and not all(s[0] for s in shown) and any(s[0] for s in shown),
+          'both lines shown, the selected one blinks')
 
     r = Run()
     n = r.n

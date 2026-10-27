@@ -109,5 +109,10 @@ def install_payload(n):
     for i, v in enumerate(data):
         n[0x6000 + i] = v
     syms = labels()
-    for i in range(18):
-        n[syms['title_text'] + i] = data[syms['title_1p'] - 0x6000 + i]
+
+    def code(name, size):
+        return list(data[syms[name] - 0x6000:syms[name] - 0x6000 + size])
+    text = ([0x22, 0x6B] + code('menu_1p', 9) + [0] + [0x22, 0xAB] + code('menu_2p', 9) + [0]
+            + code('menu_attr', 7))
+    for i, v in enumerate(text):
+        n[syms['title_text'] + i] = v

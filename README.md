@@ -11,7 +11,8 @@ falls off the screen is pulled back in behind the leader.
 
 All of the patch's code is new and written for this project. It contains no
 code or data from R.C. Pro-Am II. One-player games are unchanged: they run
-cycle-for-cycle the same as the unpatched game (see *Testing*).
+cycle-for-cycle the same as the unpatched game (see *Testing*); only the
+title screen looks different, because of the new player menu.
 
 ## Applying
 
@@ -25,7 +26,7 @@ Base ROM: `R.C. Pro-Am (USA) (Rev 1).nes` (iNES file, 65,552 bytes)
 | without the 16-byte header | `AAED295C` | `e9ddcfc47956fa55623621a2475bf6df70489426` |
 
 Apply it with any IPS tool (Flips, Lunar IPS, an online patcher). The result is
-a 98,320-byte file with CRC32 `BA00BA0C`.
+a 98,320-byte file with CRC32 `2568A3B3`.
 
 The patched ROM has an NES 2.0 header: mapper 1 (MMC1), 32 KB PRG-ROM, 64 KB
 CHR-ROM and 8 KB PRG-RAM. It works in current emulators (tested with an
@@ -34,9 +35,9 @@ that support MMC1 with PRG-RAM.
 
 ## How to play
 
-* On the title screen ("PUSH START / FOR 1 PLAYER") press **SELECT** on
-  controller 1, or **START** on controller 2. The text changes to
-  **FOR 2 PLAYERS**. Press the same button again to switch back to 1 player.
+* The title screen has a menu under "PUSH START": **1 PLAYER** and
+  **2 PLAYERS**. The selected line blinks. Choose with **up/down** or
+  **SELECT** on controller 1; **START** on controller 2 picks 2 PLAYERS.
 * Player 1 presses **START** to begin.
 * Controls are the same for both players: **B** accelerates, **A** fires,
   **left/right** steer. Only player 1's START pauses the game.
@@ -83,7 +84,7 @@ the new code through 7 small hooks (listed in `build.py`):
 | `$9BBF` | object loop, cars 0–3: player 2's car |
 | `$9BF5`, `$9BF8` | after the objects move: position tags, pull-along, sprite placement |
 | `$AA31` | race result |
-| `$D0D1`, `$D120` | title screen text and 1/2 player switch |
+| `$D0D1`, `$D120` | title screen menu (1 PLAYER / 2 PLAYERS) |
 
 Player 2's car runs the game's own player-car code. Before car 2's update, its
 state (and that of its missile slot) is swapped with player 1's car slot,
@@ -131,6 +132,6 @@ python3 tests/test_2p.py out/         # 2 player scenarios (+ screenshots in out
 machine state and plays both with the same autopilot inputs through several
 races, game over and continue, and the attract mode. It compares RAM and the
 picture on every frame.
-`test_2p.py` covers the title switch, races with both players driving, either
+`test_2p.py` covers the title menu, races with both players driving, either
 player idle (pull-along and camera), qualifying, player 2's weapons, pickups and
 crashes, and several races in a row.
