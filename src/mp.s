@@ -84,6 +84,7 @@ DrawTag      = $93B9
 DrawSprites  = $EC6A
 DrawCarOnly  = $B1A9
 TitleEnd     = $91B6
+Pause        = $9D54            ; what START does during a race
 AddScore     = $94D4            ; A = tens, Y = thousands (BCD-like pairs)
 PlaySfx      = $C4B9
 
@@ -281,8 +282,7 @@ read_p2:
         stx $4016
         ldx #8
 @bit:   lda $4017
-        and #3
-        cmp #1
+        lsr a
         rol p2raw
         dex
         bne @bit
@@ -353,7 +353,7 @@ set_dispatch:
 
 dispatch2p:
         lda real_game
-        beq @orig               ; attract demo
+        beq @near               ; attract demo
         cpx #0
         bne @notp1
         lda spr_next            ; where player 1's car sprite will go
@@ -361,14 +361,21 @@ dispatch2p:
         lda o_state+P2S         ; first frame of a race: car 1 still has
         and #$FC                ; the CPU state the game gave it
         cmp #4
-        beq @orig
+        beq @near
         jsr race_init
         ldx #0
-        jmp (handler_vec)
+@near:  jmp (handler_vec)
 @notp1: cpx #P2S
-        bne @orig
+        bne @near
         jsr read_p2
-        jsr update_camera       ; player 1 has moved: place the camera
+        lda cam_xs              ; camera as player 1's update left it
+        sta csx
+        lda cam_xs+1
+        sta csx+1
+        lda cam_ys
+        sta csy
+        lda cam_ys+1
+        sta csy+1
         ldx #P2S
         lda #$FF
         sta p2_entry
@@ -381,17 +388,46 @@ dispatch2p:
         lda spr_next
         sta p2_entry
         jsr swap_in
-        ldx #0
+        lda o_state+4           ; player 1's missile / explosion slot: keep a
+        sta snap_state          ; copy if it is in use (player 2's update
+        beq @free               ; puts anything it starts there)
+        jsr snap_proj
+@free:  ldx #0
         stx obj_idx
         inc in_p2
         jsr @orig
         dec in_p2
-        jsr swap_out
-        jsr cam_store           ; the player code centred it on player 2
+        lda o_state+4
+        cmp snap_state
+        bne @spawn
+        cmp #0
+        beq @back
+        lda o_xl+4
+        cmp snap_buf+1
+        bne @spawn
+        lda o_yl+4
+        cmp snap_buf+2
+        beq @back
+@spawn: jsr move_proj           ; it is player 2's: to slot 4+P2S
+        lda snap_state
+        beq @back
+        jsr unsnap_proj         ; and player 1's back
+@back:  jsr swap_out
+        lda cam_xs              ; camera as player 2's update left it
+        sta csx+2
+        lda cam_xs+1
+        sta csx+3
+        lda cam_ys
+        sta csy+2
+        lda cam_ys+1
+        sta csy+3
+        jsr update_camera       ; the real camera, before the CPU cars draw
         ldx #P2S
         stx obj_idx
         rts
-@idle:  jmp DrawCarOnly
+@idle:  jsr update_camera
+        ldx #P2S
+        jmp DrawCarOnly
 @orig:  jmp (handler_vec)
 
 .macro XCHG a1, a2
@@ -410,20 +446,21 @@ dispatch2p:
         XCHG base+4, base+4+P2S
 .endmacro
 
+; The car's own entries.  Only what the player code uses is exchanged (not the
+; CPU-only arrays, race progress or the timer array) to save CPU time: there
+; is little to spare before the HUD split.
 swap_objects:
-        XOBJ o_state
-        XOBJ o_xl
-        XOBJ o_yl
-        XOBJ o_xh
-        XOBJ o_yh
-        XOBJ o_sector
-        XOBJ o_flags
-        XOBJ o_timer
-        XOBJ o_xf
-        XOBJ o_yf
-        XOBJ o_head
-        XOBJ o_speed
-        XCAR c_prog0
+        XCAR o_state
+        XCAR o_xl
+        XCAR o_yl
+        XCAR o_xh
+        XCAR o_yh
+        XCAR o_sector
+        XCAR o_flags
+        XCAR o_xf
+        XCAR o_yf
+        XCAR o_head
+        XCAR o_speed
         XCAR c_flash
         XCAR c_headd
         XCAR c_speedf
@@ -432,16 +469,7 @@ swap_objects:
         XCAR c_bounce
         XCAR c_bounced
         XCAR c_spin
-        XCAR c_prog1
-        XCAR c_laps
-        XCAR $0600
-        XCAR $0604
-        XCAR $0608
-        XCAR $060C
-        XCAR $0610
-        XCAR $0614
-        XCAR $0618
-        XCAR race_pos
+        XCAR $0604              ; top speed, worked out by the player code
         ; player-only globals
         XCHG pad_held, p2held
         XCHG pad_new, p2new
@@ -453,6 +481,58 @@ swap_objects:
         XCHG ammo, p2ammo
         XCHG weapon, p2weap
         XCHG turbo_t, p2turbo
+        rts
+
+; Copy of player 1's missile / explosion slot (4)
+.macro PRJ_ARRAYS op
+        op o_state, 0
+        op o_xl, 1
+        op o_yl, 2
+        op o_xh, 3
+        op o_yh, 4
+        op o_sector, 5
+        op o_flags, 6
+        op o_timer, 7
+        op o_xf, 8
+        op o_yf, 9
+        op o_head, 10
+        op o_speed, 11
+.endmacro
+.macro SNAP base, i
+        lda base+4
+        sta snap_buf+i
+.endmacro
+.macro UNSNAP base, i
+        lda snap_buf+i
+        sta base+4
+.endmacro
+snap_proj:
+        PRJ_ARRAYS SNAP
+        rts
+unsnap_proj:
+        PRJ_ARRAYS UNSNAP
+        rts
+
+; a missile / explosion player 2's car started went into slot 4: move it
+.macro MPRJ base
+        lda base+4
+        sta base+4+P2S
+.endmacro
+move_proj:
+        MPRJ o_state
+        MPRJ o_xl
+        MPRJ o_yl
+        MPRJ o_xh
+        MPRJ o_yh
+        MPRJ o_sector
+        MPRJ o_flags
+        MPRJ o_timer
+        MPRJ o_xf
+        MPRJ o_yf
+        MPRJ o_head
+        MPRJ o_speed
+        lda #0
+        sta o_state+4
         rts
 
 swap_in:
@@ -628,6 +708,46 @@ clamp:
 ; own palette and owner, and the positions are kept for the tags.
 ; X = car slot (0 / P2S), Y = sprite list entry or $FF for none.
 ; =============================================================================
+; The player code drew the car relative to the camera it set itself (saved in
+; csx/csy, 2 bytes per player); move it to the real camera.  X = 0 / P2S,
+; Y = sprite list entry.  (Cheaper than place_car.)
+shift_car:
+        txa
+        asl a
+        tax
+        lda csx,x
+        sec
+        sbc cam_xs
+        sta tmp0
+        lda csx+1,x
+        sbc cam_xs+1
+        sta tmp1
+        lda spr_list+2,y
+        clc
+        adc tmp0
+        sta tmp2                ; screen x
+        lda spr_list+3,y
+        adc tmp1
+        sta tmp3
+        lda csy,x
+        sec
+        sbc cam_ys
+        sta tmp0
+        lda csy+1,x
+        sbc cam_ys+1
+        sta tmp1
+        txa
+        lsr a
+        tax
+        lda spr_list+4,y
+        clc
+        adc tmp0
+        sta tmp0                ; screen y
+        lda spr_list+5,y
+        adc tmp1
+        sta tmp1
+        jmp place_y
+
 place_car:
         lda o_xf,x
         sec
@@ -666,6 +786,8 @@ place_car:
         lda tmp1
         sbc cam_ys+1
         sta tmp1
+place_y:
+        lda tmp1
         beq @y_ok
         lda #1                  ; off the top or bottom
         sta tmp3
@@ -695,6 +817,23 @@ place_car:
         sta pvis,x
         rts
 
+; hook at $9D74 in the pause screen ("lda #0 / jsr $FF9D" -> "jsr h_pause"):
+; START on controller 2 counts as START.  The 1 player path costs 24 extra
+; cycles, a multiple of 8 (the pause frame also waits for the sprite 0 hit).
+h_pause:
+        lda #0
+        jsr SetCHR0
+        lda twop
+        bne @two
+        nop
+        rts
+@two:   jsr read_p2
+        lda p2new
+        and #$10
+        ora pad_new
+        sta pad_new
+        rts
+
 ; =============================================================================
 ; Once per frame after all objects moved (hook at $9BF5, replaces the call
 ; to the position tag routine).
@@ -711,28 +850,65 @@ h_frame:
         lda #0
         sta sector_swap
 @tags:  jsr DrawTag             ; tag tiles for player 1
-        jsr calc_p2pos
-        lda p2pos
-        asl a
-        clc
-        adc #$E9
-        sta p2tag_tile
         lda race_over
         beq @racing
         ; Race over: the game decides with $5C whether to continue.  With
         ; two humans the better one counts, but (as in 1 player) at least one
         ; CPU car must be beaten: 3rd place then means both CPU cars are
         ; ahead, which is out.
+        ; The places are exchanged, not overwritten: the next race puts the
+        ; cars on the grid by place, so every car must keep its own.  The
+        ; game recomputes player 1's place every frame, so this always
+        ; starts from the final places, saved once.
+        lda pos_saved
+        bne @restore
+        inc pos_saved
+        ldx #3
+@save:  lda race_pos,x
+        sta final_pos,x
+        dex
+        bpl @save
+@restore:
+        ldx #3
+@rest:  lda final_pos,x
+        sta race_pos,x
+        dex
+        bpl @rest
         jsr best_pos
         cmp #2
         bcc @keep
         lda #3
-@keep:  sta race_pos
+@keep:  ldx #3
+@find:  cmp race_pos,x
+        beq @swap
+        dex
+        bpl @find
+        rts
+@swap:  ldy race_pos
+        sta race_pos
+        sty race_pos,x
         rts
 @racing:
-        jsr p2_lap_bonus
-        jsr update_leader
+        lda p2new               ; START on controller 2 pauses too
+        and #$10
+        beq @nopause
+        jmp Pause
+@nopause:
+        bit $2002               ; running late (HUD split already reached)?
+        bvs @late               ; then leave the rest for the next frame
+        lda frame_ctr           ; spread the bookkeeping over two frames
+        lsr a
+        bcs @odd
+        jsr calc_p2pos
+        lda p2pos
+        asl a
+        clc
+        adc #$E9
+        sta p2tag_tile
+        jmp p2_lap_bonus
+@odd:   jsr update_leader
         jmp pull_along
+@late:  rts
 
 ; Lap bonuses for player 2, like the game gives player 1 ($A9DD): 25 points
 ; every half lap, 100 points and a jingle for a full lap.
@@ -807,8 +983,8 @@ update_leader:
 
 ; ---- pull-along --------------------------------------------------------------
 HIST_N    = 32                  ; ring buffer size (power of two)
-HIST_BACK = 14                  ; how many frames behind the leader to drop
-OFF_LIMIT = 20                  ; frames off-screen before being pulled along
+HIST_BACK = 7                   ; entries (2 frames each) behind the leader
+OFF_LIMIT = 10                  ; checks (every 2nd frame) off-screen first
 
 pull_along:
         lda race_over
@@ -933,15 +1109,21 @@ h_oam:
         jsr active
         bne @two
         jmp DrawSprites
-@two:   ldx #0
+@two:   bit $2002               ; HUD split reached already (an unusually
+        bvc @intime             ; busy frame)?  Then keep last frame's sprites
+        rts                     ; so the split is not delayed any further.
+@intime:
+        ldx #0
         ldy p1_entry
-        jsr place_car
+        jsr shift_car
         ldx #P2S
         ldy p2_entry
-        jsr place_car
-        ldy p2_entry
         cpy #$FF
-        beq @tag1
+        bne @p2act
+        jsr place_car           ; waiting / finished: drawn like a CPU car
+        jmp @tag1
+@p2act: jsr shift_car
+        ldy p2_entry
         lda #P2S                ; player 2's car: own palette and owner
         sta spr_list+7,y
         lda spr_list+6,y
@@ -1016,6 +1198,7 @@ race_init:
         lda #4                  ; player 2 takes over car 1
         sta o_state+P2S
         lda #0
+        sta pos_saved
         sta cam_ok
         sta off_cnt
         sta hist_cnt
@@ -1138,6 +1321,12 @@ pvis:        .res 2
 psx:         .res 2
 psy:         .res 2
 p2pos:       .res 1
+pos_saved:   .res 1
+final_pos:   .res 4
+csx:         .res 4          ; camera after player 1's / player 2's update
+csy:         .res 4
+snap_state:  .res 1
+snap_buf:    .res 12
 p2_laps:     .res 1
 p2_prog:     .res 1
 p2tag_tile:  .res 1
@@ -1156,4 +1345,4 @@ h_p0:        .res HIST_N
 h_p1:        .res HIST_N
 h_lap:       .res HIST_N
 
-.export loader, h_title, h_dispatch, h_frame, h_oam, h_finish, title_text
+.export loader, h_title, h_dispatch, h_frame, h_oam, h_finish, h_pause, title_text

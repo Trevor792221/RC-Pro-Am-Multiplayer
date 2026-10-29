@@ -26,7 +26,7 @@ Base ROM: `R.C. Pro-Am (USA) (Rev 1).nes` (iNES file, 65,552 bytes)
 | without the 16-byte header | `AAED295C` | `e9ddcfc47956fa55623621a2475bf6df70489426` |
 
 Apply it with any IPS tool (Flips, Lunar IPS, an online patcher). The result is
-a 98,320-byte file with CRC32 `2568A3B3`.
+a 98,320-byte file with CRC32 `84EF5DB6`.
 
 The patched ROM has an NES 2.0 header: mapper 1 (MMC1), 32 KB PRG-ROM, 64 KB
 CHR-ROM and 8 KB PRG-RAM. It works in current emulators (tested with an
@@ -40,7 +40,7 @@ that support MMC1 with PRG-RAM.
   **SELECT** on controller 1; **START** on controller 2 picks 2 PLAYERS.
 * Player 1 presses **START** to begin.
 * Controls are the same for both players: **B** accelerates, **A** fires,
-  **left/right** steer. Only player 1's START pauses the game.
+  **left/right** steer. Either player can pause with START.
 
 ### Rules in a 2 player game
 
@@ -67,7 +67,6 @@ that support MMC1 with PRG-RAM.
   displayed.
 * The between-race upgrade screen shows player 1's upgrades.
 * Player 2's car has no engine sound.
-* Only player 1 can pause.
 
 ## How it works
 

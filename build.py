@@ -54,6 +54,8 @@ def hooks(s):
         # per-frame work after the objects moved
         (0x9BF5, [0x20, 0xB9, 0x93], jsr(s['h_frame'])),
         (0x9BF8, [0x20, 0x6A, 0xEC], jsr(s['h_oam'])),
+        # pause screen: controller 2 can unpause
+        (0x9D74, [0xA9, 0x00, 0x20, 0x9D, 0xFF], jsr(s['h_pause']) + [NOP, NOP]),
         # race result
         (0xAA31, [0xAD, 0x50, 0x04], jsr(s['h_finish'])),
         # title screen

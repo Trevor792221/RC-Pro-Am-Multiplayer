@@ -114,7 +114,7 @@ def main():
 
     def count_warps(i, a, b):
         c = r.var('off_cnt')
-        if prev[0] >= 19 and c == 0:
+        if prev[0] >= 9 and c == 0:
             warps[0] += 1
         prev[0] = c
         return a, b
