@@ -1,0 +1,19 @@
+/* Small clean-ups on top of uBlock Origin so YouTube feels like the app. */
+
+@-moz-document domain("m.youtube.com") {
+  /* "Open the app" / "Get YouTube Premium" banners and promos. */
+  ytm-mealbar-promo-renderer,
+  .mealbar-promo-renderer,
+  ytm-statement-banner-renderer,
+  ytm-promoted-sparkles-web-renderer,
+  ytm-companion-ad-renderer,
+  ad-slot-renderer {
+    display: none !important;
+  }
+
+  /* No visible scrollbar, like a phone app. */
+  html {
+    scrollbar-width: none !important;
+  }
+}
+

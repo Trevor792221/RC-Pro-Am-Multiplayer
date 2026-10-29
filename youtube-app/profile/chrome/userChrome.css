@@ -1,0 +1,27 @@
+/* Hide Firefox's browser UI so the window looks like a standalone app.
+   Move the mouse to the very top edge of the window to reveal the toolbar
+   (back/forward, reload, address bar, uBlock Origin button). */
+
+#TabsToolbar,
+#PersonalToolbar,
+#sidebar-box,
+#sidebar-splitter,
+#sidebar-main {
+  visibility: collapse !important;
+}
+
+#navigator-toolbox {
+  min-height: 4px !important;
+  border-bottom: none !important;
+}
+
+#navigator-toolbox:not(:hover):not(:focus-within) #nav-bar {
+  min-height: 0 !important;
+  max-height: 0 !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+}
+
+#nav-bar {
+  transition: max-height 120ms ease, opacity 120ms ease !important;
+}
